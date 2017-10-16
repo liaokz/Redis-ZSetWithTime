@@ -35,6 +35,11 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
   // register the commands
   RMUtil_RegisterWriteCmd(ctx, "zts.zadd", zaddCommand);
   RMUtil_RegisterWriteCmd(ctx, "zts.zincrby", zincrbyCommand);
+  RMUtil_RegisterWriteCmd(ctx, "zts.zrem", zremCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zcard", zcardCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zscore", zscoreCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zrank", zrankCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zrevrank", zrevrankCommand);
 
   return REDISMODULE_OK;
 }

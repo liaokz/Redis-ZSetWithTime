@@ -82,6 +82,18 @@ dictType zsetDictType = {
     NULL                       /* val destructor */
 };
 
+/* Hash table parameters */
+#define HASHTABLE_MIN_FILL        10      /* Minimal hash table fill 10% */
+
+int htNeedsResize(dict *dict) {
+    long long size, used;
+
+    size = dictSlots(dict);
+    used = dictSize(dict);
+    return (size > DICT_HT_INITIAL_SIZE &&
+            (used*100/size < HASHTABLE_MIN_FILL));
+}
+
 /*-----------------------------------------------------------------------------
  *  rewrite necessary functions from redis 4.0
  *----------------------------------------------------------------------------*/
@@ -528,6 +540,23 @@ static int zslParseRange(RedisModuleString *min, RedisModuleString *max, zranges
  * Common sorted set API
  *----------------------------------------------------------------------------*/
 
+unsigned int zsetLength(const zset *zs) {
+    return zs->zsl->length;
+}
+
+/* Return (by reference) the score of the specified member of the sorted set
+ * storing it into *score. If the element does not exist C_ERR is returned
+ * otherwise C_OK is returned and *score is correctly populated.
+ * If 'zobj' or 'member' is NULL, C_ERR is returned. */
+int zsetScore(zset *zs, sds member, double *score) {
+    if (!zs || !member) return C_ERR;
+
+    dictEntry *de = dictFind(zs->dict, member);
+    if (de == NULL) return C_ERR;
+    *score = *(double*)dictGetVal(de);
+    return REDISMODULE_OK;
+}
+
 /* Add a new element or update the score of an existing element in a sorted
  * set, regardless of its encoding.
  *
@@ -639,6 +668,67 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
     return 0; /* Never reached. */
 }
 
+/* Delete the element 'ele' from the sorted set, returning 1 if the element
+ * existed and was deleted, 0 otherwise (the element was not there). */
+int zsetDel(zset *zs, sds ele) {
+    dictEntry *de;
+    double score;
+
+    de = dictUnlink(zs->dict,ele);
+    if (de != NULL) {
+        /* Get the score in order to delete from the skiplist later. */
+        score = *(double*)dictGetVal(de);
+
+        /* Delete from the hash table and later from the skiplist.
+         * Note that the order is important: deleting from the skiplist
+         * actually releases the SDS string representing the element,
+         * which is shared between the skiplist and the hash table, so
+         * we need to delete from the skiplist as the final step. */
+        dictFreeUnlinkedEntry(zs->dict,de);
+
+        /* Delete from skiplist. */
+        int retval = zslDelete(zs->zsl,score,ele,NULL);
+        serverAssert(retval);
+
+        if (htNeedsResize(zs->dict)) dictResize(zs->dict);
+        return 1;
+    }
+    return 0; /* No such element found. */
+}
+
+/* Given a sorted set object returns the 0-based rank of the object or
+ * -1 if the object does not exist.
+ *
+ * For rank we mean the position of the element in the sorted collection
+ * of elements. So the first element has rank 0, the second rank 1, and so
+ * forth up to length-1 elements.
+ *
+ * If 'reverse' is false, the rank is returned considering as first element
+ * the one with the lowest score. Otherwise if 'reverse' is non-zero
+ * the rank is computed considering as element with rank 0 the one with
+ * the highest score. */
+long zsetRank(zset *zs, sds ele, int reverse) {
+    unsigned long llen = zsetLength(zs);
+    unsigned long rank;
+
+    zskiplist *zsl = zs->zsl;
+    dictEntry *de;
+    double score;
+
+    de = dictFind(zs->dict,ele);
+    if (de != NULL) {
+        score = *(double*)dictGetVal(de);
+        rank = zslGetRank(zsl,score,ele);
+        /* Existing elements always have a rank. */
+        serverAssert(rank != 0);
+        if (reverse)
+            return llen-rank;
+        else
+            return rank-1;
+    }
+    return -1;
+}
+
 /*-----------------------------------------------------------------------------
  * Sorted set commands
  *----------------------------------------------------------------------------*/
@@ -662,6 +752,8 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     int processed = 0;  /* Number of elements processed, may remain zero with
                            options like XX. */
     int ret = 0;
+
+    RedisModule_AutoMemory(ctx);
 
     /* Parse options. At the end 'scoreidx' is set to the argument position
      * of the score of the first score-element pair. */
@@ -708,7 +800,10 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     scores = zmalloc(sizeof(double)*elements);
     for (j = 0; j < elements; j++) {
         if ((ret=RedisModule_StringToDouble(argv[scoreidx+j*2],&scores[j]))
-            != REDISMODULE_OK) goto cleanup;
+            != REDISMODULE_OK) {
+            ret = RedisModule_ReplyWithError(ctx,"value is not a valid float");
+            goto cleanup;
+        }
     }
 
     /* Lookup the key and create the sorted set if does not exist. */
@@ -722,6 +817,7 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
             ret = RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
             goto cleanup;
         }
+        zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
     }
 
     for (j = 0; j < elements; j++) {
@@ -753,9 +849,9 @@ reply_to_client:
     }
 
 cleanup:
-    if (key) {
+    /*if (key) {
         RedisModule_CloseKey(key);
-    }
+    }*/
     zfree(scores);
     return ret;
 }
@@ -766,4 +862,100 @@ int zaddCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
 int zincrbyCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return zaddGenericCommand(ctx, argv, argc, ZADD_INCR);
+}
+
+int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModuleKey *key = NULL;
+    zset *zobj;
+    int deleted = 0, j;
+
+    RedisModule_AutoMemory(ctx);
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE);
+    if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+        return RedisModule_ReplyWithLongLong(ctx,0);
+
+    zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
+
+    for (j = 2; j < argc; j++) {
+        sds ele = sdsFromRedisModuleString(argv[j]);
+        if (zsetDel(zobj,ele)) deleted++;
+        sdsfree(ele);
+        if (zsetLength(zobj) == 0) {
+            RedisModule_DeleteKey(key);
+            break;
+        }
+    }
+
+    return RedisModule_ReplyWithLongLong(ctx,deleted);
+}
+
+int zcardCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModuleKey *key = NULL;
+    zset *zobj = NULL;
+
+    RedisModule_AutoMemory(ctx);
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+        return RedisModule_ReplyWithLongLong(ctx,0);
+
+    zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
+    return RedisModule_ReplyWithLongLong(ctx,zsetLength(zobj));
+}
+
+int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModuleKey *key = NULL;
+    zset *zobj = NULL;
+    sds ele;
+    double score;
+    int retval;
+
+    RedisModule_AutoMemory(ctx);
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+        return RedisModule_ReplyWithNull(ctx);
+
+    zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
+
+    ele = sdsFromRedisModuleString(argv[2]);
+    retval = zsetScore(zobj,ele,&score);
+    sdsfree(ele);
+    if (retval == C_ERR) {
+        return RedisModule_ReplyWithNull(ctx);
+    }
+    return RedisModule_ReplyWithDouble(ctx,score);
+}
+
+int zrankGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+        int reverse) {
+    RedisModuleKey *key = NULL;
+    sds ele;
+    zset *zobj;
+    long rank;
+
+    RedisModule_AutoMemory(ctx);
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+        return RedisModule_ReplyWithNull(ctx);
+
+    zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
+
+    ele = sdsFromRedisModuleString(argv[2]);
+    rank = zsetRank(zobj,ele,reverse);
+    sdsfree(ele);
+    if (rank >= 0) {
+        return RedisModule_ReplyWithLongLong(ctx,rank);
+    }
+    return RedisModule_ReplyWithNull(ctx);
+}
+
+int zrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return zrankGenericCommand(ctx, argv, argc, 0);
+}
+
+int zrevrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return zrankGenericCommand(ctx, argv, argc, 1);
 }
