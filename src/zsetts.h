@@ -3,6 +3,8 @@
 
 #include "redismodule.h"
 
+void freeZsetObject(void *o);
+
 int zaddCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zincrbyCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);

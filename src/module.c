@@ -9,7 +9,7 @@
 RedisModuleType *ZSetTsType;
 
 void ZSetTsFreeCallback(void *value) {
-    RedisModule_Free(value);
+    freeZsetObject(value);
 }
 
 int RedisModule_OnLoad(RedisModuleCtx *ctx) {

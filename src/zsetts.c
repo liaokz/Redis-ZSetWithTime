@@ -129,6 +129,14 @@ zset *createZsetObject(void) {
     return zs;
 }
 
+void zslFree(zskiplist *zsl);
+void freeZsetObject(void *o) {
+    zset *zs = (zset *)o;
+    dictRelease(zs->dict);
+    zslFree(zs->zsl);
+    zfree(zs);
+}
+
 /*-----------------------------------------------------------------------------
  * Skiplist implementation of the low level API from redis 4.0
  *----------------------------------------------------------------------------*/
