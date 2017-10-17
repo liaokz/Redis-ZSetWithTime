@@ -8,10 +8,6 @@
 
 RedisModuleType *ZSetTsType;
 
-void ZSetTsFreeCallback(void *value) {
-    freeZsetObject(value);
-}
-
 int RedisModule_OnLoad(RedisModuleCtx *ctx) {
 
   // Register the module itself
@@ -26,7 +22,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
     .rdb_load = ZSetTsRDBLoad,
     .rdb_save = ZSetTsRDBSave,
     .aof_rewrite = ZSetTsAOFRewrite,
-    .free = ZSetTsFreeCallback
+    .free = freeZsetObject
   };
 
   ZSetTsType = RedisModule_CreateDataType(ctx, "ZSetWithT", ZSETTS_ENCODING_VERSION, &tm);
