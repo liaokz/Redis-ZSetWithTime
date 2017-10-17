@@ -19,9 +19,9 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
   // Register the data type
   RedisModuleTypeMethods tm = {
     .version = REDISMODULE_TYPE_METHOD_VERSION,
-    .rdb_load = ZSetTsRDBLoad,
-    .rdb_save = ZSetTsRDBSave,
-    .aof_rewrite = ZSetTsAOFRewrite,
+    .rdb_load = zsetTsRDBLoad,
+    .rdb_save = zsetTsRDBSave,
+    .aof_rewrite = zsetTsAOFRewrite,
     .free = freeZsetObject
   };
 
@@ -36,6 +36,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
   RMUtil_RegisterReadCmd(ctx, "zts.zscore", zscoreCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zrank", zrankCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zrevrank", zrevrankCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zrange", zrangeCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zrevrange", zrevrangeCommand);
 
   return REDISMODULE_OK;
 }

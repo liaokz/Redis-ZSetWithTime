@@ -1,11 +1,11 @@
 #include "rdb.h"
 
-void ZSetTsRDBSave(RedisModuleIO *io, void *value)
+void zsetTsRDBSave(RedisModuleIO *io, void *value)
 {
 
 }
 
-void *ZSetTsRDBLoad(RedisModuleIO *io, int encver)
+void *zsetTsRDBLoad(RedisModuleIO *io, int encver)
 {
     if (encver != ZSETTS_ENCODING_VERSION)
     {
@@ -16,7 +16,7 @@ void *ZSetTsRDBLoad(RedisModuleIO *io, int encver)
     return NULL;
 }
 
-void ZSetTsAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value)
+void zsetTsAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value)
 {
 
 }

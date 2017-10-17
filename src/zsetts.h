@@ -12,5 +12,7 @@ int zcardCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zrevrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zrevrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 
 #endif // __ZSET_TS_ZSETTS_H

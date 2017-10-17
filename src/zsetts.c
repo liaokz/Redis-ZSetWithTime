@@ -967,3 +967,90 @@ int zrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 int zrevrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return zrankGenericCommand(ctx, argv, argc, 1);
 }
+
+int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+        int reverse) {
+    RedisModuleKey *key = NULL;
+    zset *zs = NULL;
+    int withscores = 0;
+    long long start;
+    long long end;
+    int llen;
+    int rangelen;
+
+    RedisModule_AutoMemory(ctx);
+
+    if ((RedisModule_StringToLongLong(argv[2], &start) != REDISMODULE_OK) ||
+        (RedisModule_StringToLongLong(argv[3], &end) != REDISMODULE_OK)) {
+        return RedisModule_ReplyWithNull(ctx);
+    }
+
+    if (argc == 5) {
+        size_t l;
+        const char *opt = RedisModule_StringPtrLen(argv[4], &l);
+        if (!strcasecmp(opt,"withscores")) {
+            withscores = 1;
+        } else {
+            return RedisModule_WrongArity(ctx);
+        }
+    } else if (argc > 5) {
+        return RedisModule_WrongArity(ctx);
+    }
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+        return RedisModule_ReplyWithArray(ctx, 0);
+
+    zs = (zset *)RedisModule_ModuleTypeGetValue(key);
+
+    /* Sanitize indexes. */
+    llen = zsetLength(zs);
+    if (start < 0) start = llen+start;
+    if (end < 0) end = llen+end;
+    if (start < 0) start = 0;
+
+    /* Invariant: start >= 0, so this test will be true when end < 0.
+     * The range is empty when start > end or start >= length. */
+    if (start > end || start >= llen) {
+        return RedisModule_ReplyWithArray(ctx, 0);
+    }
+    if (end >= llen) end = llen-1;
+    rangelen = (end-start)+1;
+
+    /* Return the result in form of a multi-bulk reply */
+    RedisModule_ReplyWithArray(ctx, withscores ? (rangelen*2) : rangelen);
+
+    zskiplist *zsl = zs->zsl;
+    zskiplistNode *ln;
+    sds ele;
+
+    /* Check if starting point is trivial, before doing log(N) lookup. */
+    if (reverse) {
+        ln = zsl->tail;
+        if (start > 0)
+            ln = zslGetElementByRank(zsl,llen-start);
+    } else {
+        ln = zsl->header->level[0].forward;
+        if (start > 0)
+            ln = zslGetElementByRank(zsl,start+1);
+    }
+
+    while(rangelen--) {
+        //serverAssertWithInfo(c,zobj,ln != NULL);
+        ele = ln->ele;
+        RedisModule_ReplyWithStringBuffer(ctx,ele,sdslen(ele));
+        if (withscores)
+            RedisModule_ReplyWithDouble(ctx,ln->score);
+        ln = reverse ? ln->backward : ln->level[0].forward;
+    }
+
+    return 0;
+}
+
+int zrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return zrangeGenericCommand(ctx,argv,argc,0);
+}
+
+int zrevrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return zrangeGenericCommand(ctx,argv,argc,1);
+}
