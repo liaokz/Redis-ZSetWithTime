@@ -4,8 +4,6 @@
 #include <string.h>
 #include <assert.h>
 #include "zmalloc.h"
-#include "dict.h"
-#include "rmutil/sds.h"
 
 #define serverAssert(x) assert(x)
 
@@ -97,27 +95,6 @@ int htNeedsResize(dict *dict) {
 /*-----------------------------------------------------------------------------
  *  rewrite necessary functions from redis 4.0
  *----------------------------------------------------------------------------*/
-
-typedef struct zskiplistNode {
-    sds ele;
-    double score;
-    struct zskiplistNode *backward;
-    struct zskiplistLevel {
-        struct zskiplistNode *forward;
-        unsigned int span;
-    } level[];
-} zskiplistNode;
-
-typedef struct zskiplist {
-    struct zskiplistNode *header, *tail;
-    unsigned long length;
-    int level;
-} zskiplist;
-
-typedef struct zset {
-    dict *dict;
-    zskiplist *zsl;
-} zset;
 
 zskiplist *zslCreate(void);
 

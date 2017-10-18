@@ -2,8 +2,34 @@
 #define __ZSET_TS_ZSETTS_H
 
 #include "redismodule.h"
+#include "rmutil/sds.h"
+#include "dict.h"
+
+typedef struct zskiplistNode {
+    sds ele;
+    double score;
+    struct zskiplistNode *backward;
+    struct zskiplistLevel {
+        struct zskiplistNode *forward;
+        unsigned int span;
+    } level[];
+} zskiplistNode;
+
+typedef struct zskiplist {
+    struct zskiplistNode *header, *tail;
+    unsigned long length;
+    int level;
+} zskiplist;
+
+typedef struct zset {
+    dict *dict;
+    zskiplist *zsl;
+} zset;
 
 void freeZsetObject(void *o);
+
+zset *createZsetObject(void);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
 
 int zaddCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zincrbyCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
