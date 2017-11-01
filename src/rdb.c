@@ -42,7 +42,7 @@ void *zsetTsRDBLoad(RedisModuleIO *io, int encver)
         score = RedisModule_LoadDouble(io);
 
         znode = zslInsert(zs->zsl,score,sdsele);
-        dictAdd(zs->dict,sdsele,&znode->score);
+        dictAdd(zs->dict,sdsele,znode);
     }
 
     return zs;

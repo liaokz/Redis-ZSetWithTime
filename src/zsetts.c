@@ -525,6 +525,10 @@ static int zslParseRange(RedisModuleString *min, RedisModuleString *max, zranges
  * Common sorted set API
  *----------------------------------------------------------------------------*/
 
+double getScoreFromDictEntry(dictEntry *de) {
+    return ((zskiplistNode*)dictGetVal(de))->score;
+}
+
 unsigned int zsetLength(const zset *zs) {
     return zs->zsl->length;
 }
@@ -538,7 +542,7 @@ int zsetScore(zset *zs, sds member, double *score) {
 
     dictEntry *de = dictFind(zs->dict, member);
     if (de == NULL) return C_ERR;
-    *score = *(double*)dictGetVal(de);
+    *score = getScoreFromDictEntry(de);
     return REDISMODULE_OK;
 }
 
@@ -610,7 +614,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
             *flags |= ZADD_NOP;
             return 1;
         }
-        curscore = *(double*)dictGetVal(de);
+        curscore = getScoreFromDictEntry(de);
 
         /* Prepare the score for the increment if needed. */
         if (incr) {
@@ -634,14 +638,14 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
             /* Note that we did not removed the original element from
              * the hash table representing the sorted set, so we just
              * update the score. */
-            dictGetVal(de) = &znode->score; /* Update score ptr. */
+            dictGetVal(de) = znode; /* Update score ptr. */
             *flags |= ZADD_UPDATED;
         }
         return 1;
     } else if (!xx) {
         ele = sdsdup(ele);
         znode = zslInsert(zs->zsl,score,ele);
-        serverAssert(dictAdd(zs->dict,ele,&znode->score) == DICT_OK);
+        serverAssert(dictAdd(zs->dict,ele,znode) == DICT_OK);
         *flags |= ZADD_ADDED;
         if (newscore) *newscore = score;
         return 1;
@@ -662,7 +666,7 @@ int zsetDel(zset *zs, sds ele) {
     de = dictUnlink(zs->dict,ele);
     if (de != NULL) {
         /* Get the score in order to delete from the skiplist later. */
-        score = *(double*)dictGetVal(de);
+        score = getScoreFromDictEntry(de);
 
         /* Delete from the hash table and later from the skiplist.
          * Note that the order is important: deleting from the skiplist
@@ -702,7 +706,7 @@ long zsetRank(zset *zs, sds ele, int reverse) {
 
     de = dictFind(zs->dict,ele);
     if (de != NULL) {
-        score = *(double*)dictGetVal(de);
+        score = getScoreFromDictEntry(de);
         rank = zslGetRank(zsl,score,ele);
         /* Existing elements always have a rank. */
         serverAssert(rank != 0);
