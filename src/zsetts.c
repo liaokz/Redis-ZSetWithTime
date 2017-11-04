@@ -120,11 +120,12 @@ void freeZsetObject(void *o) {
 
 /* Create a skiplist node with the specified number of levels.
  * The SDS string 'ele' is referenced by the node after the call. */
-zskiplistNode *zslCreateNode(int level, double score, sds ele) {
+zskiplistNode *zslCreateNode(int level, double score, sds ele, long long timestamp) {
     zskiplistNode *zn =
         zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel));
     zn->score = score;
     zn->ele = ele;
+    zn->timestamp = timestamp;
     return zn;
 }
 
@@ -136,7 +137,7 @@ zskiplist *zslCreate(void) {
     zsl = zmalloc(sizeof(*zsl));
     zsl->level = 1;
     zsl->length = 0;
-    zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL);
+    zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL,0);
     for (j = 0; j < ZSKIPLIST_MAXLEVEL; j++) {
         zsl->header->level[j].forward = NULL;
         zsl->header->level[j].span = 0;
@@ -181,7 +182,7 @@ int zslRandomLevel(void) {
 /* Insert a new node in the skiplist. Assumes the element does not already
  * exist (up to the caller to enforce that). The skiplist takes ownership
  * of the passed SDS string 'ele'. */
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
+zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele, long long timestamp) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned int rank[ZSKIPLIST_MAXLEVEL];
     int i, level;
@@ -214,7 +215,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
         }
         zsl->level = level;
     }
-    x = zslCreateNode(level,score,ele);
+    x = zslCreateNode(level,score,ele,timestamp);
     for (i = 0; i < level; i++) {
         x->level[i].forward = update[i]->level[i].forward;
         update[i]->level[i].forward = x;
@@ -596,6 +597,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
     int xx = (*flags & ZADD_XX) != 0;
     *flags = 0; /* We'll return our response flags. */
     double curscore;
+    long long timestamp = RedisModule_Milliseconds();
 
     /* NaN as input is an error regardless of all the other parameters. */
     if (isnan(score)) {
@@ -630,7 +632,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
         if (score != curscore) {
             zskiplistNode *node;
             serverAssert(zslDelete(zs->zsl,curscore,ele,&node));
-            znode = zslInsert(zs->zsl,score,node->ele);
+            znode = zslInsert(zs->zsl,score,node->ele,timestamp);
             /* We reused the node->ele SDS string, free the node now
              * since zslInsert created a new one. */
             node->ele = NULL;
@@ -644,7 +646,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
         return 1;
     } else if (!xx) {
         ele = sdsdup(ele);
-        znode = zslInsert(zs->zsl,score,ele);
+        znode = zslInsert(zs->zsl,score,ele,timestamp);
         serverAssert(dictAdd(zs->dict,ele,znode) == DICT_OK);
         *flags |= ZADD_ADDED;
         if (newscore) *newscore = score;
@@ -953,11 +955,13 @@ int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
         int reverse) {
     RedisModuleKey *key = NULL;
     zset *zs = NULL;
-    int withscores = 0;
+    int withscores = 0, withtimestamps = 0;
     long long start;
     long long end;
     int llen;
     int rangelen;
+    int argindex = 0;
+    int resultnum = 1;
 
     RedisModule_AutoMemory(ctx);
 
@@ -966,16 +970,18 @@ int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
         return RedisModule_ReplyWithNull(ctx);
     }
 
-    if (argc == 5) {
+    for (argindex = 4; argindex < argc; ++argindex) {
         size_t l;
-        const char *opt = RedisModule_StringPtrLen(argv[4], &l);
+        const char *opt = RedisModule_StringPtrLen(argv[argindex], &l);
         if (!strcasecmp(opt,"withscores")) {
             withscores = 1;
+            ++resultnum;
+        } else if (!strcasecmp(opt,"withtimestamps")) {
+            withtimestamps = 1;
+            ++resultnum;
         } else {
             return RedisModule_WrongArity(ctx);
         }
-    } else if (argc > 5) {
-        return RedisModule_WrongArity(ctx);
     }
 
     key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
@@ -999,7 +1005,7 @@ int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
     rangelen = (end-start)+1;
 
     /* Return the result in form of a multi-bulk reply */
-    RedisModule_ReplyWithArray(ctx, withscores ? (rangelen*2) : rangelen);
+    RedisModule_ReplyWithArray(ctx, rangelen*resultnum);
 
     zskiplist *zsl = zs->zsl;
     zskiplistNode *ln;
@@ -1022,6 +1028,8 @@ int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
         RedisModule_ReplyWithStringBuffer(ctx,ele,sdslen(ele));
         if (withscores)
             RedisModule_ReplyWithDouble(ctx,ln->score);
+        if (withtimestamps)
+            RedisModule_ReplyWithLongLong(ctx,ln->timestamp);
         ln = reverse ? ln->backward : ln->level[0].forward;
     }
 

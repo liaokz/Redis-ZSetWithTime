@@ -12,6 +12,7 @@ void zsetTsRDBSave(RedisModuleIO *io, void *value)
     while (zn != NULL) {
         RedisModule_SaveStringBuffer(io,(const char*)zn->ele,sdslen(zn->ele));
         RedisModule_SaveDouble(io,zn->score);
+        RedisModule_SaveSigned(io,(int64_t)zn->timestamp);
         zn = zn->backward;
     }
 }
@@ -34,14 +35,16 @@ void *zsetTsRDBLoad(RedisModuleIO *io, int encver)
     while(zsetlen--) {
         sds sdsele;
         double score;
+        int64_t timestamp;
         zskiplistNode *znode;
 
         size_t l = 0;
         char *cele = RedisModule_LoadStringBuffer(io, &l);
         sdsele = sdsnewlen(cele, l);
         score = RedisModule_LoadDouble(io);
+        timestamp = RedisModule_LoadSigned(io);
 
-        znode = zslInsert(zs->zsl,score,sdsele);
+        znode = zslInsert(zs->zsl,score,sdsele,(long long)timestamp);
         dictAdd(zs->dict,sdsele,znode);
     }
 
@@ -57,8 +60,8 @@ void zsetTsAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value)
     zskiplistNode *zn = zsl->tail;
     while (zn != NULL) {
         snprintf(buf, sizeof(buf), "%f", zn->score);
-        RedisModule_EmitAOF(aof,"zts.zadd","scb",
-                key,buf,(const char*)zn->ele,sdslen(zn->ele));
+        RedisModule_EmitAOF(aof,"zts.zadd","scbl",
+                key,buf,(const char*)zn->ele,sdslen(zn->ele),zn->timestamp);
         zn = zn->backward;
     }
 }

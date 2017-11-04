@@ -8,6 +8,7 @@
 typedef struct zskiplistNode {
     sds ele;
     double score;
+    long long timestamp;
     struct zskiplistNode *backward;
     struct zskiplistLevel {
         struct zskiplistNode *forward;
@@ -29,7 +30,7 @@ typedef struct zset {
 void freeZsetObject(void *o);
 
 zset *createZsetObject(void);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele, long long timestamp);
 
 int zaddCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zincrbyCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
