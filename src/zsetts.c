@@ -179,10 +179,19 @@ int zslRandomLevel(void) {
     return (level<ZSKIPLIST_MAXLEVEL) ? level : ZSKIPLIST_MAXLEVEL;
 }
 
+#define COMPARE_NODE_LT(_n, _score, _ts, _ele) \
+    ((_n)->score < (_score) || \
+     ((_n)->score == (_score) && (_n)->timestamp > (_ts)) || \
+     ((_n)->score == (_score) && (_n)->timestamp == (_ts) && sdscmp((_n)->ele,(_ele)) < 0))
+#define COMPARE_NODE_LTE(_n, _score, _ts, _ele) \
+    ((_n)->score < (_score) || \
+     ((_n)->score == (_score) && (_n)->timestamp > (_ts)) || \
+     ((_n)->score == (_score) && (_n)->timestamp == (_ts) && sdscmp((_n)->ele,(_ele)) <= 0))
+
 /* Insert a new node in the skiplist. Assumes the element does not already
  * exist (up to the caller to enforce that). The skiplist takes ownership
  * of the passed SDS string 'ele'. */
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele, long long timestamp) {
+zskiplistNode *zslInsert(zskiplist *zsl, double score, long long timestamp, sds ele) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned int rank[ZSKIPLIST_MAXLEVEL];
     int i, level;
@@ -193,9 +202,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele, long long timest
         /* store rank that is crossed to reach the insert position */
         rank[i] = i == (zsl->level-1) ? 0 : rank[i+1];
         while (x->level[i].forward &&
-                (x->level[i].forward->score < score ||
-                    (x->level[i].forward->score == score &&
-                    sdscmp(x->level[i].forward->ele,ele) < 0)))
+                COMPARE_NODE_LT(x->level[i].forward,score,timestamp,ele))
         {
             rank[i] += x->level[i].span;
             x = x->level[i].forward;
@@ -268,16 +275,14 @@ void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
  * it is not freed (but just unlinked) and *node is set to the node pointer,
  * so that it is possible for the caller to reuse the node (including the
  * referenced SDS string at node->ele). */
-int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node) {
+int zslDelete(zskiplist *zsl, double score, long long timestamp, sds ele, zskiplistNode **node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     int i;
 
     x = zsl->header;
     for (i = zsl->level-1; i >= 0; i--) {
         while (x->level[i].forward &&
-                (x->level[i].forward->score < score ||
-                    (x->level[i].forward->score == score &&
-                     sdscmp(x->level[i].forward->ele,ele) < 0)))
+                COMPARE_NODE_LT(x->level[i].forward,score,timestamp,ele))
         {
             x = x->level[i].forward;
         }
@@ -442,7 +447,7 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
  * Returns 0 when the element cannot be found, rank otherwise.
  * Note that the rank is 1-based due to the span of zsl->header to the
  * first element. */
-unsigned long zslGetRank(zskiplist *zsl, double score, sds ele) {
+unsigned long zslGetRank(zskiplist *zsl, double score, long long timestamp, sds ele) {
     zskiplistNode *x;
     unsigned long rank = 0;
     int i;
@@ -450,9 +455,7 @@ unsigned long zslGetRank(zskiplist *zsl, double score, sds ele) {
     x = zsl->header;
     for (i = zsl->level-1; i >= 0; i--) {
         while (x->level[i].forward &&
-            (x->level[i].forward->score < score ||
-                (x->level[i].forward->score == score &&
-                sdscmp(x->level[i].forward->ele,ele) <= 0))) {
+                COMPARE_NODE_LTE(x->level[i].forward,score,timestamp,ele)) {
             rank += x->level[i].span;
             x = x->level[i].forward;
         }
@@ -528,6 +531,10 @@ static int zslParseRange(RedisModuleString *min, RedisModuleString *max, zranges
 
 double getScoreFromDictEntry(dictEntry *de) {
     return ((zskiplistNode*)dictGetVal(de))->score;
+}
+
+long long getTimestampFromDictEntry(dictEntry *de) {
+    return ((zskiplistNode*)dictGetVal(de))->timestamp;
 }
 
 unsigned int zsetLength(const zset *zs) {
@@ -631,8 +638,8 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
         /* Remove and re-insert when score changes. */
         if (score != curscore) {
             zskiplistNode *node;
-            serverAssert(zslDelete(zs->zsl,curscore,ele,&node));
-            znode = zslInsert(zs->zsl,score,node->ele,timestamp);
+            serverAssert(zslDelete(zs->zsl,curscore,timestamp,ele,&node));
+            znode = zslInsert(zs->zsl,score,timestamp,node->ele);
             /* We reused the node->ele SDS string, free the node now
              * since zslInsert created a new one. */
             node->ele = NULL;
@@ -646,7 +653,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
         return 1;
     } else if (!xx) {
         ele = sdsdup(ele);
-        znode = zslInsert(zs->zsl,score,ele,timestamp);
+        znode = zslInsert(zs->zsl,score,timestamp,ele);
         serverAssert(dictAdd(zs->dict,ele,znode) == DICT_OK);
         *flags |= ZADD_ADDED;
         if (newscore) *newscore = score;
@@ -664,11 +671,13 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
 int zsetDel(zset *zs, sds ele) {
     dictEntry *de;
     double score;
+    long long timestamp;
 
     de = dictUnlink(zs->dict,ele);
     if (de != NULL) {
         /* Get the score in order to delete from the skiplist later. */
         score = getScoreFromDictEntry(de);
+        timestamp = getTimestampFromDictEntry(de);
 
         /* Delete from the hash table and later from the skiplist.
          * Note that the order is important: deleting from the skiplist
@@ -678,7 +687,7 @@ int zsetDel(zset *zs, sds ele) {
         dictFreeUnlinkedEntry(zs->dict,de);
 
         /* Delete from skiplist. */
-        int retval = zslDelete(zs->zsl,score,ele,NULL);
+        int retval = zslDelete(zs->zsl,score,timestamp,ele,NULL);
         serverAssert(retval);
 
         if (htNeedsResize(zs->dict)) dictResize(zs->dict);
@@ -705,11 +714,13 @@ long zsetRank(zset *zs, sds ele, int reverse) {
     zskiplist *zsl = zs->zsl;
     dictEntry *de;
     double score;
+    long long timestamp;
 
     de = dictFind(zs->dict,ele);
     if (de != NULL) {
         score = getScoreFromDictEntry(de);
-        rank = zslGetRank(zsl,score,ele);
+        timestamp = getTimestampFromDictEntry(de);
+        rank = zslGetRank(zsl,score,timestamp,ele);
         /* Existing elements always have a rank. */
         serverAssert(rank != 0);
         if (reverse)

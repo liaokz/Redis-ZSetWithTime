@@ -30,7 +30,7 @@ typedef struct zset {
 void freeZsetObject(void *o);
 
 zset *createZsetObject(void);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele, long long timestamp);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, long long timestamp, sds ele);
 
 int zaddCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zincrbyCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);

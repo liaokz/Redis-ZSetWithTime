@@ -44,7 +44,7 @@ void *zsetTsRDBLoad(RedisModuleIO *io, int encver)
         score = RedisModule_LoadDouble(io);
         timestamp = RedisModule_LoadSigned(io);
 
-        znode = zslInsert(zs->zsl,score,sdsele,(long long)timestamp);
+        znode = zslInsert(zs->zsl,score,(long long)timestamp,sdsele);
         dictAdd(zs->dict,sdsele,znode);
     }
 
