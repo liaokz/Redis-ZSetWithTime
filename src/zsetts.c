@@ -32,6 +32,7 @@ sds sdsFromRedisModuleString(RedisModuleString *s)
 #define ZADD_INCR (1<<0)    /* Increment the score instead of setting it. */
 #define ZADD_NX (1<<1)      /* Don't touch elements not already existing. */
 #define ZADD_XX (1<<2)      /* Only touch elements already exisitng. */
+#define ZADD_TS (1<<10)     /* Set timestamp with specified value instead current time. */
 
 /* Output flags. */
 #define ZADD_NOP (1<<3)     /* Operation not performed because of conditionals.*/
@@ -597,19 +598,24 @@ int zsetScore(zset *zs, sds member, double *score) {
  *
  * The function does not take ownership of the 'ele' SDS string, but copies
  * it if needed. */
-int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
+int zsetAdd(zset *zs, double score, long long timestamp, sds ele, int *flags, double *newscore) {
     /* Turn options into simple to check vars. */
     int incr = (*flags & ZADD_INCR) != 0;
     int nx = (*flags & ZADD_NX) != 0;
     int xx = (*flags & ZADD_XX) != 0;
     *flags = 0; /* We'll return our response flags. */
     double curscore;
-    long long timestamp = RedisModule_Milliseconds();
+    long long curtimestamp;
 
     /* NaN as input is an error regardless of all the other parameters. */
     if (isnan(score)) {
         *flags = ZADD_NAN;
         return 0;
+    }
+
+    /* Set timestamp with current time if it is 0 */
+    if (timestamp == 0) {
+        timestamp = RedisModule_Milliseconds();
     }
 
     /* Update the sorted set according to its encoding. */
@@ -624,6 +630,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
             return 1;
         }
         curscore = getScoreFromDictEntry(de);
+        curtimestamp = getTimestampFromDictEntry(de);
 
         /* Prepare the score for the increment if needed. */
         if (incr) {
@@ -638,7 +645,7 @@ int zsetAdd(zset *zs, double score, sds ele, int *flags, double *newscore) {
         /* Remove and re-insert when score changes. */
         if (score != curscore) {
             zskiplistNode *node;
-            serverAssert(zslDelete(zs->zsl,curscore,timestamp,ele,&node));
+            serverAssert(zslDelete(zs->zsl,curscore,curtimestamp,ele,&node));
             znode = zslInsert(zs->zsl,score,timestamp,node->ele);
             /* We reused the node->ele SDS string, free the node now
              * since zslInsert created a new one. */
@@ -744,6 +751,7 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     zset *zobj = NULL;
     sds ele;
     double score = 0, *scores = NULL;
+    long long timestamp = 0, *timestamps = NULL;
     int j, elements;
     int scoreidx = 0;
     /* The following vars are used in order to track what the command actually
@@ -767,6 +775,7 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         else if (!strcasecmp(opt,"xx")) flags |= ZADD_XX;
         else if (!strcasecmp(opt,"ch")) flags |= ZADD_CH;
         else if (!strcasecmp(opt,"incr")) flags |= ZADD_INCR;
+        else if (!strcasecmp(opt,"ts")) flags |= ZADD_TS;
         else break;
         scoreidx++;
     }
@@ -776,19 +785,32 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     int nx = (flags & ZADD_NX) != 0;
     int xx = (flags & ZADD_XX) != 0;
     int ch = (flags & ZADD_CH) != 0;
+    int ts = (flags & ZADD_TS) != 0;
 
     /* After the options, we expect to have an even number of args, since
      * we expect any number of score-element pairs. */
     elements = argc-scoreidx;
-    if (elements % 2 || !elements) {
-        return RedisModule_WrongArity(ctx);
+    if (ts) {
+        if (elements % 3 || !elements) {
+            return RedisModule_WrongArity(ctx);
+        }
+        elements /= 3; /* Now this holds the number of score-element triple. */
+    } else {
+        if (elements % 2 || !elements) {
+            return RedisModule_WrongArity(ctx);
+        }
+        elements /= 2; /* Now this holds the number of score-element pairs. */
     }
-    elements /= 2; /* Now this holds the number of score-element pairs. */
 
     /* Check for incompatible options. */
     if (nx && xx) {
         return RedisModule_ReplyWithError(ctx,
             "XX and NX options at the same time are not compatible");
+    }
+
+    if (ts && incr) {
+        return RedisModule_ReplyWithError(ctx,
+            "TS and INCR options at the same time are not compatible");
     }
 
     if (incr && elements > 1) {
@@ -800,10 +822,22 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
      * before executing additions to the sorted set, as the command should
      * either execute fully or nothing at all. */
     scores = zmalloc(sizeof(double)*elements);
+    timestamps = zmalloc(sizeof(long long)*elements);
+    int step = 3, eleoffset = 2;
+    if (!ts) {
+        memset(timestamps, 0, sizeof(long long)*elements);
+        step = 2;
+        eleoffset = 1;
+    }
     for (j = 0; j < elements; j++) {
-        if ((ret=RedisModule_StringToDouble(argv[scoreidx+j*2],&scores[j]))
+        if ((ret=RedisModule_StringToDouble(argv[scoreidx+j*step],&scores[j]))
             != REDISMODULE_OK) {
             ret = RedisModule_ReplyWithError(ctx,"value is not a valid float");
+            goto cleanup;
+        }
+        if (ts && (ret=RedisModule_StringToLongLong(argv[scoreidx+1+j*step],&timestamps[j]))
+            != REDISMODULE_OK) {
+            ret = RedisModule_ReplyWithError(ctx,"timestamp is not a valid long long");
             goto cleanup;
         }
     }
@@ -825,10 +859,11 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     for (j = 0; j < elements; j++) {
         double newscore;
         score = scores[j];
+        timestamp = timestamps[j];
         int retflags = flags;
 
-        ele = sdsFromRedisModuleString(argv[scoreidx+1+j*2]);
-        int retval = zsetAdd(zobj, score, ele, &retflags, &newscore);
+        ele = sdsFromRedisModuleString(argv[scoreidx+eleoffset+j*step]);
+        int retval = zsetAdd(zobj, score, timestamp, ele, &retflags, &newscore);
         sdsfree(ele);
         if (retval == 0) {
             ret = RedisModule_ReplyWithError(ctx,nanerr);
