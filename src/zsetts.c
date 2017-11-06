@@ -5,6 +5,12 @@
 #include <assert.h>
 #include "zmalloc.h"
 
+void serverAssertWithInfo(RedisModuleCtx *c, const void *o, const char *estr, const char *file, int line) {
+	RedisModule_Log(c,"warning","=== ASSERTION FAILED ===");
+	RedisModule_Log(c,"warning","==> %s:%d '%s' is not true",file,line,estr);
+	assert(0);
+}
+#define serverAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (serverAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__)))
 #define serverAssert(x) assert(x)
 
 extern RedisModuleType *ZSetTsType;
@@ -1069,7 +1075,7 @@ int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
     }
 
     while(rangelen--) {
-        //serverAssertWithInfo(c,zobj,ln != NULL);
+        serverAssertWithInfo(ctx,zs,ln != NULL);
         ele = ln->ele;
         RedisModule_ReplyWithStringBuffer(ctx,ele,sdslen(ele));
         if (withscores)
