@@ -769,6 +769,8 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
                            options like XX. */
     int ret = 0;
 
+    if (argc < 4) return RedisModule_WrongArity(ctx);
+
     RedisModule_AutoMemory(ctx);
 
     /* Parse options. At the end 'scoreidx' is set to the argument position
@@ -913,6 +915,8 @@ int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     zset *zobj;
     int deleted = 0, j;
 
+    if (argc < 2) return RedisModule_WrongArity(ctx);
+
     RedisModule_AutoMemory(ctx);
 
     key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE);
@@ -943,6 +947,8 @@ int zremrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
     unsigned long deleted = 0;
     zrangespec range;
     long long start, end, llen;
+
+    if (argc < 4) return RedisModule_WrongArity(ctx);
 
     /* Step 1: Parse the range. */
     if (rangetype == ZRANGE_RANK) {
@@ -1013,6 +1019,8 @@ int zcardCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModuleKey *key = NULL;
     zset *zobj = NULL;
 
+    if (argc < 2) return RedisModule_WrongArity(ctx);
+
     RedisModule_AutoMemory(ctx);
 
     key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
@@ -1029,6 +1037,8 @@ int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     sds ele;
     double score;
     int retval;
+
+    if (argc < 3) return RedisModule_WrongArity(ctx);
 
     RedisModule_AutoMemory(ctx);
 
@@ -1053,6 +1063,8 @@ int zrankGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     sds ele;
     zset *zobj;
     long rank;
+
+    if (argc < 3) return RedisModule_WrongArity(ctx);
 
     RedisModule_AutoMemory(ctx);
 
@@ -1090,6 +1102,8 @@ int zrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
     int rangelen;
     int argindex = 0;
     int resultnum = 1;
+
+    if (argc < 4) return RedisModule_WrongArity(ctx);
 
     RedisModule_AutoMemory(ctx);
 
@@ -1182,6 +1196,8 @@ int genericZrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
     unsigned long rangelen = 0;
     int minidx, maxidx;
     int resultnum = 1;
+
+    if (argc < 4) return RedisModule_WrongArity(ctx);
 
     /* Parse the range arguments. */
     if (reverse) {
@@ -1312,6 +1328,8 @@ int zcountCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     zset *zs = NULL;
     zrangespec range;
     int count = 0;
+
+    if (argc < 4) return RedisModule_WrongArity(ctx);
 
     /* Parse the range arguments */
     if (zslParseRange(argv[2],argv[3],&range) != REDISMODULE_OK) {
