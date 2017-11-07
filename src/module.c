@@ -32,12 +32,17 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
   RMUtil_RegisterWriteCmd(ctx, "zts.zadd", zaddCommand);
   RMUtil_RegisterWriteCmd(ctx, "zts.zincrby", zincrbyCommand);
   RMUtil_RegisterWriteCmd(ctx, "zts.zrem", zremCommand);
+  RMUtil_RegisterWriteCmd(ctx, "zts.zremrangebyrank", zremrangebyrankCommand);
+  RMUtil_RegisterWriteCmd(ctx, "zts.zremrangebyscore", zremrangebyscoreCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zcard", zcardCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zcount", zcountCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zscore", zscoreCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zrank", zrankCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zrevrank", zrevrankCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zrange", zrangeCommand);
   RMUtil_RegisterReadCmd(ctx, "zts.zrevrange", zrevrangeCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zrangebyscore", zrangebyscoreCommand);
+  RMUtil_RegisterReadCmd(ctx, "zts.zrevrangebyscore", zrevrangebyscoreCommand);
 
   return REDISMODULE_OK;
 }

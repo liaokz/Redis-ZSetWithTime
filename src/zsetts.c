@@ -934,6 +934,81 @@ int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return RedisModule_ReplyWithLongLong(ctx,deleted);
 }
 
+/* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE commands. */
+#define ZRANGE_RANK 0
+#define ZRANGE_SCORE 1
+int zremrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, int rangetype) {
+	RedisModuleKey *key = NULL;
+	zset *zs = NULL;
+    unsigned long deleted = 0;
+    zrangespec range;
+    long long start, end, llen;
+
+    /* Step 1: Parse the range. */
+    if (rangetype == ZRANGE_RANK) {
+        if ((RedisModule_StringToLongLong(argv[2],&start) != REDISMODULE_OK) ||
+            (RedisModule_StringToLongLong(argv[3],&end) != REDISMODULE_OK))
+        	return RedisModule_ReplyWithNull(ctx);
+    } else if (rangetype == ZRANGE_SCORE) {
+        if (zslParseRange(argv[2],argv[3],&range) != REDISMODULE_OK) {
+        	return RedisModule_ReplyWithError(ctx,"min or max is not a float");
+        }
+    }
+
+    /* Step 2: Lookup & range sanity checks if needed. */
+    RedisModule_AutoMemory(ctx);
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE);
+	if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+		goto cleanup;
+
+    zs = (zset *)RedisModule_ModuleTypeGetValue(key);
+
+    if (rangetype == ZRANGE_RANK) {
+        /* Sanitize indexes. */
+        llen = zsetLength(zs);
+        if (start < 0) start = llen+start;
+        if (end < 0) end = llen+end;
+        if (start < 0) start = 0;
+
+        /* Invariant: start >= 0, so this test will be true when end < 0.
+         * The range is empty when start > end or start >= length. */
+        if (start > end || start >= llen) {
+        	RedisModule_ReplyWithLongLong(ctx,0);
+            goto cleanup;
+        }
+        if (end >= llen) end = llen-1;
+    }
+
+    /* Step 3: Perform the range deletion operation. */
+	switch(rangetype) {
+	case ZRANGE_RANK:
+		deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->dict);
+		break;
+	case ZRANGE_SCORE:
+		deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->dict);
+		break;
+	}
+	if (htNeedsResize(zs->dict)) dictResize(zs->dict);
+	if (zsetLength(zs) == 0) {
+		RedisModule_DeleteKey(key);
+	}
+
+    /* Step 4: Reply. */
+	RedisModule_ReplyWithLongLong(ctx,deleted);
+
+cleanup:
+    return 0;
+}
+
+int zremrangebyrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return zremrangeGenericCommand(ctx,argv,argc,ZRANGE_RANK);
+}
+
+int zremrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return zremrangeGenericCommand(ctx,argv,argc,ZRANGE_SCORE);
+}
+
 int zcardCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModuleKey *key = NULL;
     zset *zobj = NULL;
@@ -1095,4 +1170,175 @@ int zrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
 int zrevrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return zrangeGenericCommand(ctx,argv,argc,1);
+}
+
+/* This command implements ZRANGEBYSCORE, ZREVRANGEBYSCORE. */
+int genericZrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, int reverse) {
+    zrangespec range;
+    RedisModuleKey *key = NULL;
+	zset *zs = NULL;
+    long long offset = 0, limit = -1;
+    int withscores = 0;
+    unsigned long rangelen = 0;
+    int minidx, maxidx;
+
+    /* Parse the range arguments. */
+    if (reverse) {
+        /* Range is given as [max,min] */
+        maxidx = 2; minidx = 3;
+    } else {
+        /* Range is given as [min,max] */
+        minidx = 2; maxidx = 3;
+    }
+
+    if (zslParseRange(argv[minidx],argv[maxidx],&range) != REDISMODULE_OK) {
+    	return RedisModule_ReplyWithError(ctx,"min or max is not a float");
+    }
+
+    /* Parse optional extra arguments. Note that ZCOUNT will exactly have
+     * 4 arguments, so we'll never enter the following code path. */
+    if (argc > 4) {
+        int remaining = argc - 4;
+        int pos = 4;
+
+        while (remaining) {
+        	size_t l;
+			const char *opt = RedisModule_StringPtrLen(argv[pos], &l);
+            if (remaining >= 1 && !strcasecmp(opt,"withscores")) {
+                pos++; remaining--;
+                withscores = 1;
+            } else if (remaining >= 3 && !strcasecmp(opt,"limit")) {
+                if ((RedisModule_StringToLongLong(argv[pos+1], &offset)
+                        != REDISMODULE_OK) ||
+                    (RedisModule_StringToLongLong(argv[pos+2], &limit)
+                        != REDISMODULE_OK))
+                {
+                	return RedisModule_ReplyWithNull(ctx);
+                }
+                pos += 3; remaining -= 3;
+            } else {
+            	return RedisModule_WrongArity(ctx);
+            }
+        }
+    }
+
+    /* Ok, lookup the key and get the range */
+    RedisModule_AutoMemory(ctx);
+
+	key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+	if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+		return RedisModule_ReplyWithNull(ctx);
+
+	zs = (zset *)RedisModule_ModuleTypeGetValue(key);
+	zskiplist *zsl = zs->zsl;
+	zskiplistNode *ln;
+
+	/* If reversed, get the last node in range as starting point. */
+	if (reverse) {
+		ln = zslLastInRange(zsl,&range);
+	} else {
+		ln = zslFirstInRange(zsl,&range);
+	}
+
+	/* No "first" element in the specified interval. */
+	if (ln == NULL) {
+		return RedisModule_ReplyWithArray(ctx, 0);
+	}
+
+	/* We don't know in advance how many matching elements there are in the
+	 * list, so we push this object that will represent the multi-bulk
+	 * length in the output buffer, and will "fix" it later */
+	RedisModule_ReplyWithArray(ctx,REDISMODULE_POSTPONED_ARRAY_LEN);
+
+	/* If there is an offset, just traverse the number of elements without
+	 * checking the score because that is done in the next loop. */
+	while (ln && offset--) {
+		if (reverse) {
+			ln = ln->backward;
+		} else {
+			ln = ln->level[0].forward;
+		}
+	}
+
+	while (ln && limit--) {
+		/* Abort when the node is no longer in range. */
+		if (reverse) {
+			if (!zslValueGteMin(ln->score,&range)) break;
+		} else {
+			if (!zslValueLteMax(ln->score,&range)) break;
+		}
+
+		rangelen++;
+		RedisModule_ReplyWithStringBuffer(ctx,ln->ele,sdslen(ln->ele));
+
+		if (withscores) {
+			RedisModule_ReplyWithDouble(ctx,ln->score);
+		}
+
+		/* Move to next node */
+		if (reverse) {
+			ln = ln->backward;
+		} else {
+			ln = ln->level[0].forward;
+		}
+	}
+
+    if (withscores) {
+        rangelen *= 2;
+    }
+
+    RedisModule_ReplySetArrayLength(ctx, rangelen);
+    return 0;
+}
+
+int zrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return genericZrangebyscoreCommand(ctx, argv, argc, 0);
+}
+
+int zrevrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    return genericZrangebyscoreCommand(ctx, argv, argc, 1);
+}
+
+int zcountCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModuleKey *key = NULL;
+    zset *zs = NULL;
+    zrangespec range;
+    int count = 0;
+
+    /* Parse the range arguments */
+    if (zslParseRange(argv[2],argv[3],&range) != REDISMODULE_OK) {
+    	return RedisModule_ReplyWithError(ctx,"min or max is not a float");
+    }
+
+    RedisModule_AutoMemory(ctx);
+
+    /* Lookup the sorted set */
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+	if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+		return RedisModule_ReplyWithLongLong(ctx, count);
+
+	zs = (zset *)RedisModule_ModuleTypeGetValue(key);
+	zskiplist *zsl = zs->zsl;
+	zskiplistNode *zn;
+	unsigned long rank;
+
+	/* Find first element in range */
+	zn = zslFirstInRange(zsl, &range);
+
+	/* Use rank of first element, if any, to determine preliminary count */
+	if (zn != NULL) {
+		rank = zslGetRank(zsl, zn->score, zn->timestamp, zn->ele);
+		count = (zsl->length - (rank - 1));
+
+		/* Find last element in range */
+		zn = zslLastInRange(zsl, &range);
+
+		/* Use rank of last element, if any, to determine the actual count */
+		if (zn != NULL) {
+			rank = zslGetRank(zsl, zn->score, zn->timestamp, zn->ele);
+			count -= (zsl->length - rank);
+		}
+	}
+
+    return RedisModule_ReplyWithLongLong(ctx, count);
 }

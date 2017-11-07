@@ -35,11 +35,16 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, long long timestamp, sds 
 int zaddCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zincrbyCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zremrangebyrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zremrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zcardCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zrevrankCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 int zrevrangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zrevrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+int zcountCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 
 #endif // __ZSET_TS_ZSETTS_H
