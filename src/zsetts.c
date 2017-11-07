@@ -896,6 +896,7 @@ cleanup:
         RedisModule_CloseKey(key);
     }*/
     zfree(scores);
+    zfree(timestamps);
     return ret;
 }
 
