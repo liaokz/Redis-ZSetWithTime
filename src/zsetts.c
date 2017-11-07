@@ -1178,9 +1178,10 @@ int genericZrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
     RedisModuleKey *key = NULL;
 	zset *zs = NULL;
     long long offset = 0, limit = -1;
-    int withscores = 0;
+    int withscores = 0, withtimestamps = 0;
     unsigned long rangelen = 0;
     int minidx, maxidx;
+    int resultnum = 1;
 
     /* Parse the range arguments. */
     if (reverse) {
@@ -1207,7 +1208,12 @@ int genericZrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
             if (remaining >= 1 && !strcasecmp(opt,"withscores")) {
                 pos++; remaining--;
                 withscores = 1;
-            } else if (remaining >= 3 && !strcasecmp(opt,"limit")) {
+                ++resultnum;
+            } else if (!strcasecmp(opt,"withtimestamps")) {
+                withtimestamps = 1;
+                pos++; remaining--;
+                ++resultnum;
+            }else if (remaining >= 3 && !strcasecmp(opt,"limit")) {
                 if ((RedisModule_StringToLongLong(argv[pos+1], &offset)
                         != REDISMODULE_OK) ||
                     (RedisModule_StringToLongLong(argv[pos+2], &limit)
@@ -1275,6 +1281,10 @@ int genericZrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
 			RedisModule_ReplyWithDouble(ctx,ln->score);
 		}
 
+		if (withtimestamps) {
+			RedisModule_ReplyWithLongLong(ctx,ln->timestamp);
+		}
+
 		/* Move to next node */
 		if (reverse) {
 			ln = ln->backward;
@@ -1283,9 +1293,7 @@ int genericZrangebyscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
 		}
 	}
 
-    if (withscores) {
-        rangelen *= 2;
-    }
+	rangelen *= resultnum;
 
     RedisModule_ReplySetArrayLength(ctx, rangelen);
     return 0;
