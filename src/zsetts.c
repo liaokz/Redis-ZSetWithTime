@@ -1057,6 +1057,38 @@ int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return RedisModule_ReplyWithDouble(ctx,score);
 }
 
+int zscoretsCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModuleKey *key = NULL;
+    zset *zobj = NULL;
+    sds ele;
+    double score;
+    long long timestamp;
+
+    if (argc < 3) return RedisModule_WrongArity(ctx);
+
+    RedisModule_AutoMemory(ctx);
+
+    key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+        return RedisModule_ReplyWithArray(ctx,0);
+
+    zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
+
+    ele = sdsFromRedisModuleString(argv[2]);
+    dictEntry *de = dictFind(zobj->dict, ele);
+    sdsfree(ele);
+	if (de == NULL) {
+    	return RedisModule_ReplyWithArray(ctx,0);
+    }
+
+	score = getScoreFromDictEntry(de);
+	timestamp = getTimestampFromDictEntry(de);
+
+	RedisModule_ReplyWithArray(ctx,2);
+	RedisModule_ReplyWithDouble(ctx,score);
+    return RedisModule_ReplyWithLongLong(ctx,timestamp);
+}
+
 int zrankGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         int reverse) {
     RedisModuleKey *key = NULL;
