@@ -60,8 +60,8 @@ void zsetTsAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value)
     zskiplistNode *zn = zsl->tail;
     while (zn != NULL) {
         snprintf(buf, sizeof(buf), "%f", zn->score);
-        RedisModule_EmitAOF(aof,"zts.zadd","scbl",
-                key,buf,(const char*)zn->ele,sdslen(zn->ele),zn->timestamp);
+        RedisModule_EmitAOF(aof,"ZTS.ZADD","scclb",
+                key,"TS",buf,zn->timestamp,(const char*)zn->ele,sdslen(zn->ele));
         zn = zn->backward;
     }
 }
