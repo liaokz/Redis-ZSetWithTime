@@ -17,11 +17,16 @@ extern RedisModuleType *ZSetTsType;
 
 static char *nullbulk = "-1";
 
-sds sdsFromRedisModuleString(RedisModuleString *s)
+sds sdsFromRedisModuleString(sds s, RedisModuleString *m)
 {
     size_t l;
-    const char *c = RedisModule_StringPtrLen(s, &l);
-    return sdsnewlen(c, l);
+    const char *c = RedisModule_StringPtrLen(m, &l);
+    if (s == NULL) {
+    	s = sdsnewlen(c, l);
+    } else {
+    	s = sdscpylen(s, c, l);
+    }
+    return s;
 }
 
 /*-----------------------------------------------------------------------------
@@ -619,11 +624,6 @@ int zsetAdd(zset *zs, double score, long long timestamp, sds ele, int *flags, do
         return 0;
     }
 
-    /* Set timestamp with current time if it is 0 */
-    if (timestamp == 0) {
-        timestamp = RedisModule_Milliseconds();
-    }
-
     /* Update the sorted set according to its encoding. */
     zskiplistNode *znode;
     dictEntry *de;
@@ -755,9 +755,9 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     static char *nanerr = "resulting score is not a number (NaN)";
     RedisModuleKey *key = NULL;
     zset *zobj = NULL;
-    sds ele;
+    sds ele = NULL;
     double score = 0, *scores = NULL;
-    long long timestamp = 0, *timestamps = NULL;
+    long long timestamp = 0, curtimestamp = 0, *timestamps = NULL;
     int j, elements;
     int scoreidx = 0;
     /* The following vars are used in order to track what the command actually
@@ -767,6 +767,7 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     int updated = 0;    /* Number of elements with updated score. */
     int processed = 0;  /* Number of elements processed, may remain zero with
                            options like XX. */
+    char scorebuf[64];
     int ret = 0;
 
     if (argc < 4) return RedisModule_WrongArity(ctx);
@@ -836,6 +837,7 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         memset(timestamps, 0, sizeof(long long)*elements);
         step = 2;
         eleoffset = 1;
+        curtimestamp = RedisModule_Milliseconds();
     }
     for (j = 0; j < elements; j++) {
         if ((ret=RedisModule_StringToDouble(argv[scoreidx+j*step],&scores[j]))
@@ -864,15 +866,23 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
     }
 
+    ele = sdsempty();
+
     for (j = 0; j < elements; j++) {
         double newscore;
         score = scores[j];
         timestamp = timestamps[j];
         int retflags = flags;
 
-        ele = sdsFromRedisModuleString(argv[scoreidx+eleoffset+j*step]);
+        /* Set timestamp with current time if it is 0 */
+        if (timestamp == 0) {
+            timestamp = curtimestamp;
+        }
+
+        size_t l;
+		const char *c = RedisModule_StringPtrLen(argv[scoreidx+eleoffset+j*step], &l);
+        ele = sdscpylen(ele, c, l);
         int retval = zsetAdd(zobj, score, timestamp, ele, &retflags, &newscore);
-        sdsfree(ele);
         if (retval == 0) {
             ret = RedisModule_ReplyWithError(ctx,nanerr);
             goto cleanup;
@@ -881,6 +891,10 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         if (retflags & ZADD_UPDATED) updated++;
         if (!(retflags & ZADD_NOP)) processed++;
         score = newscore;
+
+        /* Replicate to slave/aof. */
+        snprintf(scorebuf, sizeof(scorebuf), "%f", newscore);
+        RedisModule_Replicate(ctx,"ZTS.ZADD","scclb",argv[1],"TS",scorebuf,timestamp,c,l);
     }
 
 reply_to_client:
@@ -899,6 +913,7 @@ cleanup:
     }*/
     zfree(scores);
     zfree(timestamps);
+    sdsfree(ele);
     return ret;
 }
 
@@ -914,6 +929,7 @@ int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModuleKey *key = NULL;
     zset *zobj;
     int deleted = 0, j;
+	sds ele = NULL;
 
     if (argc < 2) return RedisModule_WrongArity(ctx);
 
@@ -926,16 +942,18 @@ int zremCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
 
     for (j = 2; j < argc; j++) {
-        sds ele = sdsFromRedisModuleString(argv[j]);
+        ele = sdsFromRedisModuleString(ele, argv[j]);
         if (zsetDel(zobj,ele)) deleted++;
-        sdsfree(ele);
         if (zsetLength(zobj) == 0) {
             RedisModule_DeleteKey(key);
             break;
         }
     }
+	sdsfree(ele);
 
-    return RedisModule_ReplyWithLongLong(ctx,deleted);
+    RedisModule_ReplyWithLongLong(ctx,deleted);
+    RedisModule_ReplicateVerbatim(ctx);
+    return REDISMODULE_OK;
 }
 
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE commands. */
@@ -965,8 +983,10 @@ int zremrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
     RedisModule_AutoMemory(ctx);
 
     key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE);
-	if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType)
+	if (key == NULL || RedisModule_ModuleTypeGetType(key) != ZSetTsType) {
+		RedisModule_ReplyWithNull(ctx);
 		goto cleanup;
+	}
 
     zs = (zset *)RedisModule_ModuleTypeGetValue(key);
 
@@ -1002,6 +1022,7 @@ int zremrangeGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
 
     /* Step 4: Reply. */
 	RedisModule_ReplyWithLongLong(ctx,deleted);
+    RedisModule_ReplicateVerbatim(ctx);
 
 cleanup:
     return 0;
@@ -1034,7 +1055,7 @@ int zcardCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModuleKey *key = NULL;
     zset *zobj = NULL;
-    sds ele;
+    sds ele = NULL;
     double score;
     int retval;
 
@@ -1048,7 +1069,7 @@ int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
     zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
 
-    ele = sdsFromRedisModuleString(argv[2]);
+    ele = sdsFromRedisModuleString(ele, argv[2]);
     retval = zsetScore(zobj,ele,&score);
     sdsfree(ele);
     if (retval == C_ERR) {
@@ -1060,7 +1081,7 @@ int zscoreCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 int zscoretsCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModuleKey *key = NULL;
     zset *zobj = NULL;
-    sds ele;
+    sds ele = NULL;
     double score;
     long long timestamp;
 
@@ -1074,7 +1095,7 @@ int zscoretsCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
     zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
 
-    ele = sdsFromRedisModuleString(argv[2]);
+    ele = sdsFromRedisModuleString(ele, argv[2]);
     dictEntry *de = dictFind(zobj->dict, ele);
     sdsfree(ele);
 	if (de == NULL) {
@@ -1092,7 +1113,7 @@ int zscoretsCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 int zrankGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         int reverse) {
     RedisModuleKey *key = NULL;
-    sds ele;
+    sds ele = NULL;
     zset *zobj;
     long rank;
 
@@ -1106,7 +1127,7 @@ int zrankGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
 
     zobj = (zset *)RedisModule_ModuleTypeGetValue(key);
 
-    ele = sdsFromRedisModuleString(argv[2]);
+    ele = sdsFromRedisModuleString(ele, argv[2]);
     rank = zsetRank(zobj,ele,reverse);
     sdsfree(ele);
     if (rank >= 0) {
