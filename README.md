@@ -34,7 +34,8 @@ The commands supported are listed below. All of them should be called with `zts.
 | ~~zscan~~ |  |
   
 ### zts.zadd
-By default, the timestamp will be set according to the time of the server when the member is inserted. With the `ts` option, timestamp value can be specified in the format `zts.zadd key [ts] score timestamp member`, e.g `zts.zadd myzts ts 1 10000 a`.  
+By default, the timestamp will be set according to the time of the server when the member is inserted. With the `ts` option, timestamp value can be specified in the format `zts.zadd key [ts] score timestamp member`, e.g `zts.zadd myzts ts 1 1510798920243 a` will insert an element with score of 1 and timestamp of 1510798920243.  
+One important thing is that, if write the default `zts.zadd` command into the AOF file directly, when loading back the data the timestamp will regenerated and be differ from the orignal one. So the default `zts.zadd` command will be converted to a `zts.zadd` command with the `ts` option associated with the current timestamp in the AOF.
   
 **Note**: TS and INCR options at the same time are not compatible.  
   
@@ -101,3 +102,6 @@ redis> zts.zscorets myzsetts a
 redis> zts.zscorets myzsetts g
 (empty list or set)
 ```
+
+## License
+Redis-ZSetWithTime is licensed under MIT, see LICENSE file.
