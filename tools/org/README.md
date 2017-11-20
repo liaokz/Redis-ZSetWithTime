@@ -1,0 +1,1 @@
+Files in this directory are from the redis project. Please copy them back to the `src` dir in redis to do the `make`.
