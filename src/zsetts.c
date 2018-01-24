@@ -645,7 +645,6 @@ int zsetAdd(zset *zs, double score, long long timestamp, sds ele, int *flags, do
                 *flags |= ZADD_NAN;
                 return 0;
             }
-            if (newscore) *newscore = score;
         }
 
         /* Remove and re-insert when score changes. */
@@ -663,6 +662,7 @@ int zsetAdd(zset *zs, double score, long long timestamp, sds ele, int *flags, do
             dictGetVal(de) = znode; /* Update score ptr. */
             *flags |= ZADD_UPDATED;
         }
+        if (newscore) *newscore = score;
         return 1;
     } else if (!xx) {
         ele = sdsdup(ele);
