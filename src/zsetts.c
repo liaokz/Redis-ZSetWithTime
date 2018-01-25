@@ -11,7 +11,7 @@ void serverAssertWithInfo(RedisModuleCtx *c, const void *o, const char *estr, co
 	assert(0);
 }
 #define serverAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (serverAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__)))
-#define serverAssert(x) assert(x)
+#define serverAssert(x) if (!(x)) assert(x)
 
 extern RedisModuleType *ZSetTsType;
 
@@ -893,8 +893,10 @@ int zaddGenericCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
         score = newscore;
 
         /* Replicate to slave/aof. */
-        snprintf(scorebuf, sizeof(scorebuf), "%f", newscore);
-        RedisModule_Replicate(ctx,"ZTS.ZADD","scclb",argv[1],"TS",scorebuf,timestamp,c,l);
+        if (!(retflags & ZADD_NOP)) {
+			snprintf(scorebuf, sizeof(scorebuf), "%f", newscore);
+			RedisModule_Replicate(ctx,"ZTS.ZADD","scclb",argv[1],"TS",scorebuf,timestamp,c,l);
+        }
     }
 
 reply_to_client:
