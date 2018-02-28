@@ -1,5 +1,5 @@
 # Redis-ZSetWithTime
-[![license](https://img.shields.io/github/license/mashape/apistatus.svg)](#) [![GitHub last commit](https://img.shields.io/github/last-commit/google/skia.svg)](#)  
+[![Build Status](https://travis-ci.org/liaokz/Redis-ZSetWithTime.svg?branch=master)](https://travis-ci.org/liaokz/Redis-ZSetWithTime) [![license](https://img.shields.io/github/license/mashape/apistatus.svg)](#) [![GitHub last commit](https://img.shields.io/github/last-commit/google/skia.svg)](#)  
 An enhanced zset structure with timestamps as a redis module.  
 
 ## Features
